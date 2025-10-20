@@ -40,7 +40,10 @@ pub fn apply_driver_fir(driver: &[f64], percentages: &[f64], scale: f64) -> Vec<
 /// # Errors
 /// Returns `FirError::LengthMismatch` if drivers and profiles lengths don't match,
 /// or if drivers have different lengths.
-pub fn manual_apply(drivers: &[Vec<f64>], profiles: &[ManualProfile]) -> Result<Vec<f64>, FirError> {
+pub fn manual_apply(
+    drivers: &[Vec<f64>],
+    profiles: &[ManualProfile],
+) -> Result<Vec<f64>, FirError> {
     if drivers.is_empty() {
         return Err(FirError::EmptyInput);
     }
@@ -86,10 +89,7 @@ pub fn manual_apply(drivers: &[Vec<f64>], profiles: &[ManualProfile]) -> Result<
 ///
 /// # Errors
 /// Returns errors if validation fails or data is insufficient for the requested lags.
-pub fn build_design(
-    drivers: &[Vec<f64>],
-    lags: &[Lag],
-) -> Result<(Array2<f64>, usize), FirError> {
+pub fn build_design(drivers: &[Vec<f64>], lags: &[Lag]) -> Result<(Array2<f64>, usize), FirError> {
     // Validate first
     let (burn_in, rows) = crate::data::validate_and_align(drivers, None, lags)?;
 
@@ -149,10 +149,7 @@ mod tests {
 
     #[test]
     fn test_manual_apply_multiple_drivers() {
-        let drivers = vec![
-            vec![10.0, 20.0, 30.0, 40.0],
-            vec![5.0, 10.0, 15.0, 20.0],
-        ];
+        let drivers = vec![vec![10.0, 20.0, 30.0, 40.0], vec![5.0, 10.0, 15.0, 20.0]];
         let profiles = vec![
             ManualProfile {
                 percentages: vec![1.0],

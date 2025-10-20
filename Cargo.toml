@@ -1,11 +1,12 @@
 [package]
 name = "wc_fir"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-ndarray = "0.16.1"
+ndarray = "0.16"
 linfa = "0.8"
 linfa-linear = "0.8"
-thiserror = "2.0.17"
+thiserror = "2"
+rand = "0.8"

@@ -10,12 +10,16 @@
 //! ## Example
 //!
 //! ```
-//! use wc_fir::{ManualProfile, OlsOptions, fit_ols, manual_apply};
+//! use wc_fir::{fit_auto, ManualProfile, OlsOptions, fit_ols, manual_apply};
 //!
 //! // Historical series (same length)
-//! let d1 = vec![120.0, 125.0, 130.0, 128.0, 140.0, 150.0, 160.0, 170.0];
-//! let d2 = vec![80.0, 82.0, 85.0, 90.0, 95.0, 98.0, 100.0, 105.0];
-//! let y = vec![95.0, 100.0, 108.0, 115.0, 120.0, 130.0, 140.0, 155.0];
+//! let d1: Vec<f64> = (0..24).map(|i| 120.0 + 2.0 * i as f64).collect();
+//! let d2: Vec<f64> = (0..24).map(|i| 80.0 + 1.5 * i as f64).collect();
+//! let y: Vec<f64> = d1
+//!     .iter()
+//!     .zip(d2.iter())
+//!     .map(|(&a, &b)| 0.6 * a + 0.3 * b + 12.0)
+//!     .collect();
 //!
 //! // Manual mode
 //! let manual = manual_apply(
@@ -28,11 +32,15 @@
 //!
 //! // Auto (OLS) mode
 //! let fit = fit_ols(
-//!     &[d1, d2],
+//!     &[d1.clone(), d2.clone()],
 //!     y.as_slice(),
 //!     &[3, 2], // lags per driver
 //!     &OlsOptions::default(),
 //! ).unwrap();
+//!
+//! // Auto defaults: build max design, lasso-select, refit OLS
+//! let auto = fit_auto(&[d1, d2], y.as_slice()).unwrap();
+//! println!("Auto RMSE: {:.4}  R²: {:.4}", auto.rmse, auto.r2);
 //!
 //! println!("OLS per driver: {:?}", fit.per_driver);
 //! println!("RMSE: {:.4}  R²: {:.4}", fit.rmse, fit.r2);
@@ -40,16 +48,23 @@
 
 // Module declarations
 pub mod data;
+mod defaults;
 pub mod fir;
+mod lasso;
 pub mod ols;
+mod select;
 mod types;
 
 // Re-export public types
-pub use types::{FirError, Lag, ManualProfile, OlsFit, OlsOptions};
+pub use types::{
+    AutoLagResult, Caps, FirError, Guardrails, IcKind, IcSearchKind, Lag, LagSelect, LassoSettings,
+    ManualProfile, OlsFit, OlsOptions, Truncation,
+};
 
 // Re-export main public functions
 pub use fir::manual_apply;
 pub use ols::fit_ols;
+pub use select::{fit_auto, fit_ols_auto_lags};
 
 #[cfg(test)]
 mod integration_tests {
@@ -94,6 +109,27 @@ mod integration_tests {
         assert_eq!(fit.per_driver.len(), 2);
         assert!(fit.rmse >= 0.0);
         assert!(fit.r2 <= 1.0);
+    }
+
+    #[test]
+    fn test_fit_auto_basic() {
+        let len = 24;
+        let mut d1 = Vec::with_capacity(len);
+        let mut d2 = Vec::with_capacity(len);
+        let mut target = Vec::with_capacity(len);
+        for i in 0..len {
+            let v1 = 100.0 + i as f64 * 5.0;
+            let v2 = 60.0 + i as f64 * 2.0;
+            d1.push(v1);
+            d2.push(v2);
+            target.push(0.65 * v1 + 0.25 * v2 + 20.0);
+        }
+        let drivers = vec![d1, d2];
+
+        let fit = fit_auto(&drivers, target.as_slice()).unwrap();
+        assert!(!fit.coeffs.is_empty());
+        assert_eq!(fit.per_driver.len(), drivers.len());
+        assert!(fit.rmse < 10.0);
     }
 
     #[test]

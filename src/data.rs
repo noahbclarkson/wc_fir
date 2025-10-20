@@ -93,7 +93,7 @@ mod tests {
         assert!(result.is_ok());
         let (burn_in, n_rows) = result.unwrap();
         assert_eq!(burn_in, 2); // max(2, 3) - 1 = 2
-        assert_eq!(n_rows, 3);  // 5 - 2 = 3
+        assert_eq!(n_rows, 3); // 5 - 2 = 3
     }
 
     #[test]

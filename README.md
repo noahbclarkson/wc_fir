@@ -2,6 +2,7 @@
 
 > A pure-Rust library for modeling working capital drivers using Finite Impulse Response (FIR) filters
 
+[![CI](https://github.com/NoahClarkson/wc_fir/actions/workflows/ci.yml/badge.svg)](https://github.com/NoahClarkson/wc_fir/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 
@@ -11,6 +12,7 @@
 
 - **Manual Mode**: Apply user-defined FIR profiles with explicit tap weights and scaling factors
 - **Auto Mode (OLS)**: Automatically estimate FIR taps from historical data using Ordinary Least Squares regression
+- **Auto Mode (fit_auto)**: Build a maximal design, run automatic lag selection (Lasso + TS-CV by default), then refit with OLS for interpretable coefficients and diagnostics
 
 The library is designed for analysts and financial engineers who need to model time-lagged relationships between drivers (e.g., revenue, production volume) and working capital components (e.g., accounts receivable, inventory).
 
@@ -19,6 +21,7 @@ The library is designed for analysts and financial engineers who need to model t
 - 🦀 **Pure Rust**: No external dependencies (BLAS, LAPACK, MKL) required
 - 🌍 **Cross-platform**: Works seamlessly on Windows, Linux, and macOS
 - 📊 **Dual modes**: Manual profiles for known relationships, OLS for data-driven discovery
+- 🧠 **Automatic lag selection**: Lasso with time-series CV by default, plus BIC and correlation-screen strategies
 - 🎯 **Flexible**: Supports multiple drivers, varying lag lengths, and intercept terms
 - 🔧 **Regularization**: Built-in ridge regression for handling collinearity
 - ✅ **Constraints**: Optional non-negativity enforcement for interpretable coefficients
@@ -30,7 +33,7 @@ Add `wc_fir` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-wc_fir = "0.1.0"
+wc_fir = "0.2.0"
 ```
 
 Or use `cargo add`:
@@ -114,6 +117,29 @@ fn main() {
 }
 ```
 
+### Example 3: Automatic Lag Selection (`fit_auto`)
+
+When you do not know the lag structure up front, `fit_auto` builds a maximal design matrix, runs a coordinate-descent Lasso path with rolling cross-validation, prunes using the guardrails, then refits with OLS on the selected columns.
+
+```rust
+use wc_fir::fit_auto;
+
+fn main() {
+    let driver_a = vec![1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7];
+    let driver_b = vec![0.8, 0.82, 0.85, 0.9, 0.95, 0.98, 1.0, 1.05];
+    let target = vec![0.6, 0.68, 0.74, 0.8, 0.86, 0.92, 0.98, 1.04];
+
+    let fit = fit_auto(&[driver_a, driver_b], &target).unwrap();
+    println!("RMSE: {:.4}  R²: {:.4}", fit.rmse, fit.r2);
+    for (idx, (scale, taps)) in fit.per_driver.iter().enumerate() {
+        println!("Driver {idx}: scale={scale:.3}, taps={taps:?}");
+    }
+}
+```
+
+> **Why do some percentage vectors look like `[1.0, 0.0]`?**
+> `OlsOptions::default()` sets `nonnegative = true`, so negative tap weights are clipped to zero and the remaining weights are renormalised to sum to one. If you prefer the raw signed coefficients, disable the flag and inspect `fit.coeffs`.
+
 ## Detailed Usage
 
 ### Understanding FIR Profiles
@@ -143,6 +169,13 @@ This means:
 - 50% appears immediately (lag 0)
 - 35% appears one period later (lag 1)
 - 15% appears two periods later (lag 2)
+
+### Interpreting scales versus percentages
+
+- `scale` is the gain applied to a driver after selection. A `scale` of `0.8` means the driver contributes 80 % of its value before the lag taps are applied.
+- The `percentages` vector distributes that gain across time. The entries always sum to one unless the driver’s scale is zero.
+- With `OlsOptions { nonnegative: true, .. }` (the default), negative tap weights are clipped to zero and the remaining entries are renormalised. That is why you might see `[1.0, 0.0]` when the second lag would otherwise be negative.
+- Disable the constraint (`nonnegative: false`) if you need the signed coefficients for further processing.
 
 ### OLS Fitting Options
 
@@ -272,11 +305,11 @@ Solve: $\min \|X\beta - y\|^2$ where $y$ is the target working capital series.
 - If `intercept=true`: Linfa adds column of ones automatically
 - If `ridge_lambda > 0`: Apply **data augmentation** (Tikhonov trick):
 
-$$
-X_{\text{aug}} = \begin{bmatrix} X \\\\ \sqrt{\lambda}I \end{bmatrix}, \quad y_{\text{aug}} = \begin{bmatrix} y \\\\ 0 \end{bmatrix}
-$$
+  $$
+  X_{\text{aug}} = \begin{bmatrix} X \\\\ \sqrt{\lambda}I \end{bmatrix}, \quad y_{\text{aug}} = \begin{bmatrix} y \\\\ 0 \end{bmatrix}
+  $$
 
-This transforms ridge regression into OLS: $\min \|X_{\text{aug}}\beta - y_{\text{aug}}\|^2$
+  This transforms ridge regression into OLS: $\min \|X_{\text{aug}}\beta - y_{\text{aug}}\|^2$
 
 #### Step 3: Coefficient Mapping
 
@@ -494,11 +527,62 @@ let opts = OlsOptions {
 
 ## Examples
 
-Additional complete examples are available in the repository:
+Run any of the binaries below with `cargo run --example <name>` to reproduce the printed diagnostics:
 
-- [Basic forecasting workflow](examples/forecast_ar.rs) - End-to-end AR forecasting
-- [Cross-validation](examples/cross_validate.rs) - Model selection with train/test splits
-- [Multi-driver analysis](examples/multi_driver.rs) - Complex working capital modeling
+- `manual_mode` – apply user-specified taps
+
+  ```text
+  Manual FIR output:
+    t=0: 76.400
+    t=1: 118.960
+    t=2: 141.240
+    t=3: 156.930
+    t=4: 169.570
+    t=5: 180.620
+  ```
+
+- `ols_basic` – fit a known lag structure through `fit_ols`
+
+  ```text
+  Plain OLS coefficients: [0.5927163149316239, 0.20438268126703263, 0.3500195556888653]
+  Driver 0: scale=0.797, percentages=[0.7435918471335078, 0.2564081528664922]
+  Driver 1: scale=0.350, percentages=[1.0]
+  RMSE=0.2074  R2=0.9999
+  Intercept=5.5111
+  ```
+
+- `auto_lasso` – use `fit_auto` (Lasso selection + OLS refit)
+
+  ```text
+  Lasso-selected lags: [3, 2]
+  Driver 0: scale=0.234, taps=[0.5343219823863578, 0.4656780176136423, 0.0]
+  Driver 1: scale=1.074, taps=[0.40716722319196963, 0.5928327768080305]
+  RMSE=0.1956  R2=0.9998
+  CV RMSE=13.2128
+  Intercept=12.2296
+  ```
+
+- `ic_bic` – grid search using the BIC criterion
+
+  ```text
+  BIC-selected lags: [0, 1]
+  Driver 0: scale=0.000, taps=[]
+  Driver 1: scale=1.420, taps=[1.0]
+  RMSE=0.021724  R2=0.999478
+  Intercept=0.453319
+  ```
+
+- `screening` – correlation screen followed by BIC prune
+
+  ```text
+  Screening kept 1 taps
+  Driver 0: scale=1.038, taps=[1.0]
+  Driver 1: scale=0.000, taps=[]
+  Driver 2: scale=0.000, taps=[]
+  RMSE=0.004169  R2=0.999986
+  CV RMSE=N/A
+  Intercept=0.555980
+  ```
 
 ## Technical Details
 

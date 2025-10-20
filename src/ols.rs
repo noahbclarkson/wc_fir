@@ -1,8 +1,8 @@
 use crate::types::{FirError, Lag, OlsFit, OlsOptions};
-use ndarray::{Array1, Array2};
 use linfa::dataset::Dataset;
 use linfa::traits::Fit;
 use linfa_linear::LinearRegression;
+use ndarray::{Array1, Array2};
 
 /// Augment design matrix and target for ridge regression via Tikhonov method.
 ///
@@ -88,12 +88,17 @@ pub fn fit_ols(
     // Create Linfa dataset and fit linear regression
     let dataset = Dataset::new(x_used, y_used);
     let linreg = LinearRegression::new().with_intercept(opts.intercept);
-    let fitted = linreg.fit(&dataset)
+    let fitted = linreg
+        .fit(&dataset)
         .map_err(|e| FirError::Linalg(format!("{:?}", e)))?;
 
     // Extract coefficients (params) - these are the FIR taps
     let beta_vec = fitted.params().to_vec();
-    let _intercept = fitted.intercept(); // Intercept is handled internally by Linfa
+    let intercept = if opts.intercept {
+        fitted.intercept()
+    } else {
+        0.0
+    };
 
     // Map β to per-driver blocks: each block represents one driver's taps
     let mut per_driver = Vec::with_capacity(lags.len());
@@ -101,11 +106,11 @@ pub fn fit_ols(
 
     for &lag in lags {
         let block = &beta_vec[off..off + lag];
-        let sum: f64 = block.iter().sum();
+        let mut scale: f64 = block.iter().sum();
 
         // Calculate percentages (normalized tap weights)
-        let mut percentages = if sum.abs() > 1e-12 {
-            block.iter().map(|&v| v / sum).collect::<Vec<_>>()
+        let mut percentages = if scale.abs() > 1e-12 {
+            block.iter().map(|&v| v / scale).collect::<Vec<_>>()
         } else {
             vec![0.0; lag]
         };
@@ -124,15 +129,20 @@ pub fn fit_ols(
                 for w in percentages.iter_mut() {
                     *w /= total;
                 }
+            } else {
+                for w in percentages.iter_mut() {
+                    *w = 0.0;
+                }
+                scale = 0.0;
             }
         }
 
-        per_driver.push((sum, percentages));
+        per_driver.push((scale, percentages));
         off += lag;
     }
 
     // Compute fit metrics on the fit window
-    let y_hat = reconstruct_fit(drivers, &per_driver, lags, burn, rows);
+    let y_hat = reconstruct_fit(drivers, &per_driver, lags, burn, rows, intercept);
     let (rmse, r2) = compute_metrics(&y, &y_hat);
 
     Ok(OlsFit {
@@ -141,18 +151,20 @@ pub fn fit_ols(
         rmse,
         r2,
         n_rows: rows,
+        intercept,
     })
 }
 
 /// Reconstruct fitted values using per-driver contributions.
 ///
 /// Applies the FIR model to the input drivers to produce predictions.
-fn reconstruct_fit(
+pub(crate) fn reconstruct_fit(
     drivers: &[Vec<f64>],
     per_driver: &[(f64, Vec<f64>)],
     lags: &[Lag],
     burn: usize,
     rows: usize,
+    intercept: f64,
 ) -> Array1<f64> {
     let mut y_hat = Array1::<f64>::zeros(rows);
 
@@ -163,6 +175,12 @@ fn reconstruct_fit(
                 let ti = burn + r;
                 y_hat[r] += scale_k * w * drivers[k][ti - j];
             }
+        }
+    }
+
+    if intercept.abs() > 0.0 {
+        for v in y_hat.iter_mut() {
+            *v += intercept;
         }
     }
 
@@ -177,22 +195,23 @@ fn reconstruct_fit(
 ///
 /// # Returns
 /// Tuple of (RMSE, R²) fit quality metrics
-fn compute_metrics(y_actual: &Array1<f64>, y_pred: &Array1<f64>) -> (f64, f64) {
+pub(crate) fn compute_metrics(y_actual: &Array1<f64>, y_pred: &Array1<f64>) -> (f64, f64) {
     let n = y_actual.len() as f64;
 
     // RMSE
-    let mse = y_actual.iter()
+    let mse = y_actual
+        .iter()
         .zip(y_pred.iter())
         .map(|(a, b)| (a - b).powi(2))
-        .sum::<f64>() / n;
+        .sum::<f64>()
+        / n;
     let rmse = mse.sqrt();
 
     // R²
     let y_mean = y_actual.mean().unwrap_or(0.0);
-    let ss_tot: f64 = y_actual.iter()
-        .map(|&v| (v - y_mean).powi(2))
-        .sum();
-    let ss_res: f64 = y_actual.iter()
+    let ss_tot: f64 = y_actual.iter().map(|&v| (v - y_mean).powi(2)).sum();
+    let ss_res: f64 = y_actual
+        .iter()
         .zip(y_pred.iter())
         .map(|(a, b)| (a - b).powi(2))
         .sum();
@@ -220,6 +239,7 @@ mod tests {
         let (scale, pct) = &result.per_driver[0];
         assert!((scale - 2.0).abs() < 0.1);
         assert!((pct[0] - 1.0).abs() < 0.1);
+        assert!(result.intercept.abs() < 1e-6);
     }
 
     #[test]
@@ -235,6 +255,7 @@ mod tests {
         let result = fit_ols(&drivers, target.as_slice(), &lags, &opts).unwrap();
         assert!(result.rmse < 5.0);
         assert!(result.r2 > 0.8);
+        assert!((result.intercept - 1.0).abs() < 1e-6);
     }
 
     #[test]
