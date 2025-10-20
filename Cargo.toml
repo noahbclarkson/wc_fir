@@ -4,6 +4,15 @@ version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
+# Publishing metadata
+description = "A pure-Rust library for modeling working capital drivers using Finite Impulse Response (FIR) filters, with support for manual profiles and automatic lag selection via OLS and Lasso"
+authors = ["Noah Clarkson"]
+repository = "https://github.com/noahbclarkson/wc_fir"
+homepage = "https://github.com/noahbclarkson/wc_fir"
+readme = "README.md"
+keywords = ["finance", "fir", "regression", "lasso", "working-capital"]
+categories = ["algorithms", "science"]
+
 [dependencies]
 ndarray = "0.16"
 linfa = "0.8"

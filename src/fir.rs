@@ -3,11 +3,11 @@ use ndarray::Array2;
 
 /// Apply a single driver's causal FIR to produce a per-driver contribution.
 ///
-/// Percentages p[0] applies to t, p[1] to t-1, etc. (causal FIR).
+/// Percentages p\[0\] applies to t, p\[1\] to t-1, etc. (causal FIR).
 ///
 /// # Arguments
 /// * `driver` - Input driver series
-/// * `percentages` - Tap weights (p[0] for current period, p[1] for lag-1, etc.)
+/// * `percentages` - Tap weights (p\[0\] for current period, p\[1\] for lag-1, etc.)
 /// * `scale` - Overall scaling factor for this driver
 ///
 /// # Returns
