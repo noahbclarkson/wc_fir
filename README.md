@@ -272,7 +272,9 @@ Solve: $\min \|X\beta - y\|^2$ where $y$ is the target working capital series.
 - If `intercept=true`: Linfa adds column of ones automatically
 - If `ridge_lambda > 0`: Apply **data augmentation** (Tikhonov trick):
 
-  $$X_{\text{aug}} = \begin{bmatrix} X \\ \sqrt{\lambda}I \end{bmatrix}, \quad y_{\text{aug}} = \begin{bmatrix} y \\ 0 \end{bmatrix}$$
+  $$
+  X_{\text{aug}} = \begin{bmatrix} X \\\\ \sqrt{\lambda}I \end{bmatrix}, \quad y_{\text{aug}} = \begin{bmatrix} y \\\\ 0 \end{bmatrix}
+  $$
 
   This transforms ridge regression into OLS: $\min \|X_{\text{aug}}\beta - y_{\text{aug}}\|^2$
 
