@@ -214,6 +214,16 @@ pub enum LagSelect {
         min_abs_corr: f64,
         prune_bic: bool,
     },
+    /// Prefix CV: choose per-driver lag lengths via rolling CV,
+    /// using contiguous prefix blocks [0..L_k-1] per driver.
+    ///
+    /// Unlike sparse selection (Lasso/Screen), this maintains the same
+    /// hypothesis class as manual OLS, just automating the choice of lag length.
+    PrefixCv {
+        caps: Caps,
+        folds: usize,
+        shared: bool, // if true, enforce L_1 = L_2 = ... (simpler)
+    },
 }
 
 impl Default for LagSelect {

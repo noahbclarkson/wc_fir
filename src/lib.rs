@@ -63,8 +63,8 @@ pub use types::{
 
 // Re-export main public functions
 pub use fir::manual_apply;
-pub use ols::fit_ols;
-pub use select::{fit_auto, fit_ols_auto_lags};
+pub use ols::{fit_ols, predict_ols};
+pub use select::{fit_auto, fit_auto_prefix, fit_ols_auto_lags};
 
 #[cfg(test)]
 mod integration_tests {

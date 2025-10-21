@@ -10,8 +10,8 @@
 //! Run with: cargo run --example ar_comparison
 
 use wc_fir::{
-    fit_auto, fit_ols, fit_ols_auto_lags, Caps, Guardrails, IcKind, IcSearchKind, LagSelect,
-    OlsOptions, Truncation,
+    fit_auto, fit_auto_prefix, fit_ols, fit_ols_auto_lags, Caps, Guardrails, IcKind,
+    IcSearchKind, LagSelect, OlsOptions, Truncation,
 };
 
 fn main() {
@@ -331,6 +331,25 @@ fn main() {
     println!();
 
     // ========================================================================
+    // Strategy 9: Prefix CV (Automatic Block Lag Selection)
+    // ========================================================================
+    println!("--- Strategy 9: Prefix CV (automatic block lag selection) ---");
+    let fit9 = fit_auto_prefix(&[driver1.to_vec(), driver2.to_vec()], &ar, None);
+
+    match fit9 {
+        Ok(result) => {
+            println!("  RMSE:       ${:.2}", result.rmse);
+            println!("  R²:         {:.4}", result.r2);
+            println!("  Intercept:  ${:.2}", result.intercept);
+            for (i, (scale, taps)) in result.per_driver.iter().enumerate() {
+                println!("  Driver {}: scale={:.4}, taps={:?}", i + 1, scale, taps);
+            }
+        }
+        Err(e) => println!("  Error: {}", e),
+    }
+    println!();
+
+    // ========================================================================
     // Summary and Recommendations
     // ========================================================================
     println!("=== Summary & Recommendations ===\n");
@@ -338,10 +357,15 @@ fn main() {
     println!("  - Driver 2 is sparse (mostly zeros), likely low predictive power");
     println!("  - With limited data (26 periods), simpler models may generalize better");
     println!("  - Ridge regularization helps when using longer lag lengths");
-    println!("  - Auto selection methods can help avoid overfitting\n");
+    println!("  - Strategies 4-7 use SPARSE selection (Lasso/BIC/screening)");
+    println!("  - Strategy 9 uses BLOCK selection (like manual, but automatic)\n");
+    println!("Understanding the Difference:");
+    println!("  Manual (1-3): Contiguous lags [0..L-1], you pick L");
+    println!("  Sparse (4-7): Select individual lags (e.g., only lag-2)");
+    println!("  Prefix CV (9): Contiguous lags [0..L-1], CV picks L\n");
     println!("Recommended Approach:");
-    println!("  1. Start with automatic lag selection (Strategy 4 or 5)");
-    println!("  2. Validate with hold-out period if you plan to forecast");
-    println!("  3. Consider BIC if interpretability is crucial (Strategy 6)");
-    println!("  4. Use ridge regularization for longer lags (Strategy 3)");
+    println!("  - Want \"automatic Manual OLS\"? Use Strategy 9 (fit_auto_prefix)");
+    println!("  - Want sparsity/feature selection? Use Strategy 4 (fit_auto/Lasso)");
+    println!("  - Have domain knowledge of lag structure? Use Manual (1-3)");
+    println!("  - Need interpretable model? Use Prefix CV (9) or BIC (6) with ridge");
 }

@@ -40,6 +40,68 @@ pub fn fit_auto(drivers: &[Vec<f64>], target: &[f64]) -> Result<OlsFit, FirError
     })
 }
 
+/// Automatic lag-length selection using prefix blocks + rolling CV.
+///
+/// Unlike `fit_auto` (which uses sparse Lasso selection), this searches for
+/// optimal lag *lengths* L_k while maintaining contiguous prefix blocks [0..L_k-1]
+/// per driver. This produces models that behave like manual OLS, just without
+/// hand-picking the lag lengths.
+///
+/// This is the "automatic Manual OLS" path.
+///
+/// # Arguments
+/// * `drivers` - Driver time series
+/// * `target` - Target series to fit
+/// * `caps` - Optional per-driver maximum lag lengths. If None, uses [6, 3] for 2 drivers.
+///
+/// # Returns
+/// OLS fit result with contiguous lag blocks chosen via rolling CV
+pub fn fit_auto_prefix(
+    drivers: &[Vec<f64>],
+    target: &[f64],
+    caps: Option<&[usize]>,
+) -> Result<OlsFit, FirError> {
+    use crate::defaults::{DEFAULT_GLOBAL_CAP_AR, DEFAULT_PREFIXCV_FOLDS, DEFAULT_PREFIXCV_SHARED};
+
+    // Use sensible per-driver caps: [6, 3] for AR (driver 1=sales, driver 2=adjustments)
+    let default_caps = if drivers.len() == 2 {
+        vec![6, 3]
+    } else {
+        vec![]
+    };
+
+    let caps_cfg = Caps {
+        per_driver_max: caps.map(|c| c.to_vec()).unwrap_or(default_caps),
+        default_cap: DEFAULT_GLOBAL_CAP_AR,
+    };
+
+    let strategy = LagSelect::PrefixCv {
+        caps: caps_cfg,
+        folds: DEFAULT_PREFIXCV_FOLDS,
+        shared: DEFAULT_PREFIXCV_SHARED,
+    };
+
+    // Use ridge like Manual OLS Strategy 3 for stability
+    let opts = OlsOptions {
+        intercept: true,
+        ridge_lambda: 1000.0, // Matches successful manual strategies
+        nonnegative: true,
+    };
+    let guards = Guardrails::default(); // ratio=5, max_total=24
+    let trunc = Truncation::default(); // epsilon=0.01
+
+    let auto = fit_ols_auto_lags(drivers, target, &strategy, &opts, &guards, &trunc)?;
+
+    Ok(OlsFit {
+        coeffs: auto.coeffs,
+        per_driver: auto.per_driver,
+        rmse: auto.rmse_fit,
+        r2: auto.r2_fit,
+        n_rows: auto.rows_used,
+        intercept: auto.intercept,
+    })
+}
+
 pub fn fit_ols_auto_lags(
     drivers: &[Vec<f64>],
     target: &[f64],
@@ -62,6 +124,7 @@ pub fn fit_ols_auto_lags(
         LagSelect::Lasso { caps, .. } => caps,
         LagSelect::Ic { caps, .. } => caps,
         LagSelect::Screen { caps, .. } => caps,
+        LagSelect::PrefixCv { caps, .. } => caps,
     };
     let mut per_driver_caps = derive_caps(drivers.len(), caps_cfg)?;
     enforce_total_cap(&mut per_driver_caps, guards.max_total_lag);
@@ -113,6 +176,17 @@ pub fn fit_ols_auto_lags(
                 prune_bic: *prune_bic,
             };
             let mask = screen_select(&x_full, &y, &column_map, params, opts, guards)?;
+            (mask, None)
+        }
+        LagSelect::PrefixCv { folds, shared, .. } => {
+            // Search for optimal prefix lag lengths via rolling CV
+            let best_lags = if *shared {
+                search_shared_prefix_l(drivers, target, &per_driver_caps, *folds, opts, guards)?
+            } else {
+                search_per_driver_prefix_l(drivers, target, &per_driver_caps, *folds, opts, guards)?
+            };
+            // Convert chosen lags to column mask (contiguous blocks [0..L_k-1])
+            let mask = lags_to_prefix_mask(&best_lags, &per_driver_caps);
             (mask, None)
         }
     };
@@ -739,6 +813,285 @@ fn bic_for_mask(
     }
     // Use proper BIC formula: n * ln(RSS/n) + k * ln(n)
     Ok(ic_value_from_rss(rss, k, n, IcKind::Bic))
+}
+
+// ============================================================================
+// Prefix CV helpers: Block lag-length selection
+// ============================================================================
+
+/// Convert chosen lag lengths to a column mask for contiguous prefix blocks.
+fn lags_to_prefix_mask(lags: &[usize], caps: &[usize]) -> Vec<bool> {
+    let mut mask = Vec::new();
+    for (driver_idx, &cap) in caps.iter().enumerate() {
+        let len = lags[driver_idx].min(cap);
+        for lag_idx in 0..cap {
+            mask.push(lag_idx < len);
+        }
+    }
+    mask
+}
+
+/// Check if a lag configuration passes guardrails.
+fn passes_guardrails(lags: &[usize], t_len: usize, guards: &Guardrails) -> bool {
+    let p: usize = lags.iter().sum();
+    if p == 0 {
+        return false;
+    }
+
+    let max_p_by_ratio =
+        ((t_len as f64) / guards.max_params_ratio.max(1.0)).floor().max(1.0) as usize;
+    if p > max_p_by_ratio {
+        return false;
+    }
+    if p > guards.max_total_lag.max(1) {
+        return false;
+    }
+    true
+}
+
+/// Search for a shared lag length L (all drivers use same length).
+fn search_shared_prefix_l(
+    drivers: &[Vec<f64>],
+    target: &[f64],
+    caps: &[usize],
+    folds: usize,
+    opts: &OlsOptions,
+    guards: &Guardrails,
+) -> Result<Vec<usize>, FirError> {
+    let lmin = *caps.iter().min().unwrap_or(&0);
+    let mut best = vec![0; caps.len()];
+    let mut best_score = f64::INFINITY;
+
+    for lag_len in 1..=lmin {
+        let candidate = vec![lag_len; caps.len()];
+        if !passes_guardrails(&candidate, target.len(), guards) {
+            continue;
+        }
+        let score = rolling_cv_rmse(drivers, target, &candidate, folds, opts)?;
+        if score < best_score {
+            best_score = score;
+            best = candidate;
+        }
+    }
+
+    // Fallback: if nothing passed, choose L=1
+    if best.iter().all(|&l| l == 0) {
+        let one = vec![1; caps.len()];
+        return Ok(one);
+    }
+    Ok(best)
+}
+
+/// Search for per-driver lag lengths via 2D grid (optimal for 2 drivers).
+fn search_2d_grid(
+    drivers: &[Vec<f64>],
+    target: &[f64],
+    caps: &[usize],
+    folds: usize,
+    opts: &OlsOptions,
+    guards: &Guardrails,
+) -> Result<Vec<usize>, FirError> {
+    if caps.len() != 2 {
+        return Err(FirError::InvalidConfig(
+            "2D grid search requires exactly 2 drivers".to_string(),
+        ));
+    }
+
+    let mut best = vec![1, 0]; // Allow dropping sparse driver
+    let mut best_score = f64::INFINITY;
+
+    for l1 in 1..=caps[0] {
+        for l2 in 0..=caps[1] {
+            let lags = vec![l1, l2];
+            if !passes_guardrails(&lags, target.len(), guards) {
+                continue;
+            }
+            let score = rolling_cv_rmse(drivers, target, &lags, folds, opts)?;
+            if score + 1e-9 < best_score {
+                best_score = score;
+                best = lags;
+            }
+        }
+    }
+
+    Ok(best)
+}
+
+/// Search for per-driver lag lengths via greedy forward search (for M>2 drivers).
+fn search_per_driver_prefix_l(
+    drivers: &[Vec<f64>],
+    target: &[f64],
+    caps: &[usize],
+    folds: usize,
+    opts: &OlsOptions,
+    guards: &Guardrails,
+) -> Result<Vec<usize>, FirError> {
+    // For 2 drivers, use the optimal 2D grid
+    if drivers.len() == 2 {
+        return search_2d_grid(drivers, target, caps, folds, opts, guards);
+    }
+
+    // For M>2, use greedy search
+    let mut lags = vec![0usize; caps.len()];
+    let mut improved = true;
+    let mut best_score = f64::INFINITY;
+
+    // Start with all 1s if possible
+    for k in 0..lags.len() {
+        lags[k] = 1.min(caps[k]);
+    }
+    if passes_guardrails(&lags, target.len(), guards) {
+        best_score = rolling_cv_rmse(drivers, target, &lags, folds, opts)?;
+    } else {
+        // Fallback to single-driver L=1
+        lags = vec![0; caps.len()];
+        if !caps.is_empty() {
+            lags[0] = 1.min(caps[0]);
+        }
+        if passes_guardrails(&lags, target.len(), guards) {
+            best_score = rolling_cv_rmse(drivers, target, &lags, folds, opts)?;
+        } else {
+            // Can't even fit one parameter - return minimal config
+            return Ok(vec![1.min(caps[0]); caps.len()]);
+        }
+    }
+
+    // Greedy forward: add one lag at a time to the driver that improves most
+    while improved {
+        improved = false;
+        let mut best_local = best_score;
+        let mut best_idx = None;
+
+        for d in 0..lags.len() {
+            if lags[d] >= caps[d] {
+                continue;
+            }
+            lags[d] += 1;
+            if passes_guardrails(&lags, target.len(), guards) {
+                let score = rolling_cv_rmse(drivers, target, &lags, folds, opts)?;
+                if score + 1e-9 < best_local {
+                    best_local = score;
+                    best_idx = Some(d);
+                }
+            }
+            lags[d] -= 1;
+        }
+
+        if let Some(d) = best_idx {
+            lags[d] += 1;
+            best_score = best_local;
+            improved = true;
+        }
+    }
+
+    Ok(lags)
+}
+
+/// Build design matrix for window [t0..t1) with proper lag context from full series.
+///
+/// For lag-based features, we need context from [t0-B..t1) where B=max(lags)-1.
+/// This prevents data leakage in CV and ensures features are computed correctly.
+fn design_for_window_with_context(
+    drivers: &[Vec<f64>],
+    target: &[f64],
+    lags: &[usize],
+    t0: usize,
+    t1: usize,
+) -> Option<(Array2<f64>, Array1<f64>)> {
+    if t0 >= t1 {
+        return None;
+    }
+    let b = lags.iter().copied().max().unwrap_or(1).saturating_sub(1);
+    if t0 < b {
+        return None; // Not enough history
+    }
+
+    let rows = t1 - t0;
+    let cols: usize = lags.iter().sum();
+    let mut x = Array2::<f64>::zeros((rows, cols));
+
+    // Fill X[r, :] = [ D1_{t0+r}, D1_{t0+r-1}, ..., D2_{...}, ... ]
+    let mut col = 0;
+    for (k, &lk) in lags.iter().enumerate() {
+        for j in 0..lk {
+            for r in 0..rows {
+                let t = t0 + r;
+                x[[r, col]] = drivers[k][t - j];
+            }
+            col += 1;
+        }
+    }
+
+    let y = Array1::from(target[t0..t1].to_vec());
+    Some((x, y))
+}
+
+/// Compute rolling time-series CV RMSE for a given lag configuration.
+///
+/// Uses proper lag context to avoid data leakage: validation features are built
+/// from the full driver series (including pre-validation context), not just the
+/// validation window.
+fn rolling_cv_rmse(
+    drivers: &[Vec<f64>],
+    target: &[f64],
+    lags: &[usize],
+    folds: usize,
+    opts: &OlsOptions,
+) -> Result<f64, FirError> {
+    let n = target.len();
+    let span = ((n as f64) / (folds as f64 + 1.0)).floor().max(2.0) as usize;
+    let mut rmse_sum = 0.0;
+    let mut count = 0;
+
+    for f in 0..folds {
+        let train_end = (span * (f + 1)).min(n - 1);
+        let valid_end = ((f + 2) * span).min(n);
+        if valid_end <= train_end + 1 {
+            continue;
+        }
+
+        // Fit on training data [0..train_end)
+        let drivers_train: Vec<Vec<f64>> =
+            drivers.iter().map(|d| d[..train_end].to_vec()).collect();
+        let target_train = &target[..train_end];
+
+        let fit = match crate::ols::fit_ols(&drivers_train, target_train, lags, opts) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+
+        // Build validation features with proper context from FULL series
+        if let Some((x_val, y_val)) =
+            design_for_window_with_context(drivers, target, lags, train_end, valid_end)
+        {
+            // Predict: yhat = X * beta + intercept
+            let beta = Array1::from(fit.coeffs.clone());
+            let mut yhat = x_val.dot(&beta);
+            if opts.intercept {
+                for v in yhat.iter_mut() {
+                    *v += fit.intercept;
+                }
+            }
+
+            // RMSE
+            let m = y_val.len();
+            let se: f64 = y_val
+                .iter()
+                .zip(yhat.iter())
+                .map(|(a, p)| {
+                    let diff = a - p;
+                    diff * diff
+                })
+                .sum();
+            rmse_sum += (se / (m as f64)).sqrt();
+            count += 1;
+        }
+    }
+
+    if count == 0 {
+        return Ok(f64::INFINITY);
+    }
+    Ok(rmse_sum / count as f64)
 }
 
 #[cfg(test)]

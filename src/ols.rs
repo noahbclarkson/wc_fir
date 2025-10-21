@@ -220,6 +220,63 @@ pub(crate) fn compute_metrics(y_actual: &Array1<f64>, y_pred: &Array1<f64>) -> (
     (rmse, r2)
 }
 
+/// Generate predictions from a fitted OLS model.
+///
+/// This is used for out-of-sample prediction in rolling CV.
+/// Applies the FIR convolution using the fitted per-driver scales and percentages.
+///
+/// # Arguments
+/// * `drivers` - Driver time series for prediction period
+/// * `fit` - Fitted OLS result containing per_driver taps and intercept
+/// * `lags` - Per-driver lag lengths (must match what was used in fitting)
+///
+/// # Returns
+/// Vector of predictions for the given drivers
+pub fn predict_ols(
+    drivers: &[Vec<f64>],
+    fit: &OlsFit,
+    lags: &[Lag],
+) -> Result<Vec<f64>, FirError> {
+    if drivers.len() != fit.per_driver.len() {
+        return Err(FirError::LengthMismatch);
+    }
+    if drivers.len() != lags.len() {
+        return Err(FirError::LengthMismatch);
+    }
+    if drivers.is_empty() {
+        return Err(FirError::EmptyInput);
+    }
+
+    let t = drivers[0].len();
+    for d in drivers.iter() {
+        if d.len() != t {
+            return Err(FirError::LengthMismatch);
+        }
+    }
+
+    // Apply FIR for each driver, then sum + intercept
+    let mut predictions = vec![fit.intercept; t];
+
+    for (driver_idx, driver) in drivers.iter().enumerate() {
+        let (scale, percentages) = &fit.per_driver[driver_idx];
+        if percentages.is_empty() {
+            continue; // Driver not used
+        }
+
+        // Apply FIR convolution
+        for (lag_idx, &pct) in percentages.iter().enumerate() {
+            if pct.abs() < 1e-12 {
+                continue;
+            }
+            for t_idx in lag_idx..t {
+                predictions[t_idx] += scale * pct * driver[t_idx - lag_idx];
+            }
+        }
+    }
+
+    Ok(predictions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
