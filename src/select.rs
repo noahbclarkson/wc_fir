@@ -55,6 +55,9 @@ pub fn fit_ols_auto_lags(
         return Err(FirError::LengthMismatch);
     }
 
+    // Validate truncation epsilon to prevent self-destructive values
+    let trunc = trunc.clone().validated();
+
     let caps_cfg = match strategy {
         LagSelect::Lasso { caps, .. } => caps,
         LagSelect::Ic { caps, .. } => caps,
@@ -318,7 +321,14 @@ fn map_to_scales_and_percentages(
             }
             let total = percentages.iter().sum::<f64>();
             if total.abs() < EPS {
-                // drop scale if everything vanished
+                // All taps truncated to zero - warn user
+                eprintln!(
+                    "Warning: All taps for driver {} were truncated to zero \
+                     (pct_epsilon={:.4}). This driver will contribute only through \
+                     the intercept. Consider using a smaller truncation threshold \
+                     (e.g., 0.01-0.05).",
+                    driver_idx, trunc_eps
+                );
                 scale = 0.0;
                 percentages.iter_mut().for_each(|w| *w = 0.0);
             } else {
@@ -427,16 +437,31 @@ fn ic_select(
     }
 }
 
-fn ic_penalty(k: usize, n: usize, criterion: IcKind) -> f64 {
-    match criterion {
-        IcKind::Bic => (n as f64).ln() * k as f64,
-        IcKind::Aic => 2.0 * k as f64,
-    }
+/// Compute information criterion (BIC or AIC) from residual sum of squares.
+///
+/// Proper formula:
+/// - BIC = n * ln(RSS/n) + k * ln(n)
+/// - AIC = n * ln(RSS/n) + 2*k
+///
+/// where RSS is residual sum of squares, n is sample size, k is number of parameters.
+fn ic_value_from_rss(rss: f64, k: usize, n: usize, criterion: IcKind) -> f64 {
+    let n_f = n as f64;
+    // Log-likelihood term: n * ln(RSS/n)
+    let ll_term = n_f * (rss / n_f).max(1e-12).ln();
+
+    // Penalty term
+    let penalty = match criterion {
+        IcKind::Bic => n_f.ln() * (k as f64),
+        IcKind::Aic => 2.0 * (k as f64),
+    };
+
+    ll_term + penalty
 }
 
+/// Convenience wrapper that takes RMSE instead of RSS.
 fn ic_value(rmse: f64, k: usize, n: usize, criterion: IcKind) -> f64 {
-    let rss = (rmse * rmse) * n as f64;
-    rss + ic_penalty(k, n, criterion)
+    let rss = (rmse * rmse) * (n as f64);
+    ic_value_from_rss(rss, k, n, criterion)
 }
 
 fn ic_select_grid(
@@ -699,7 +724,7 @@ fn bic_for_mask(
             *v += intercept;
         }
     }
-    let se = preds
+    let rss = preds
         .iter()
         .zip(y.iter())
         .map(|(p, a)| {
@@ -712,7 +737,8 @@ fn bic_for_mask(
     if opts.intercept {
         k += 1;
     }
-    Ok((se / n as f64) + (n as f64).ln() * k as f64)
+    // Use proper BIC formula: n * ln(RSS/n) + k * ln(n)
+    Ok(ic_value_from_rss(rss, k, n, IcKind::Bic))
 }
 
 #[cfg(test)]
@@ -796,7 +822,8 @@ mod tests {
     #[test]
     fn test_truncation_eliminates_small_percentages() {
         let (drivers, target) = build_series();
-        let trunc = Truncation { pct_epsilon: 0.6 };
+        // Use a reasonable epsilon that won't be clamped (< 0.5)
+        let trunc = Truncation { pct_epsilon: 0.05 };
         let strategy = LagSelect::Lasso {
             caps: Caps {
                 per_driver_max: vec![3, 2],
@@ -814,10 +841,27 @@ mod tests {
         )
         .unwrap();
 
+        // After validation and truncation, all percentages should be 0 or >= epsilon
         let first_driver = &result.per_driver[0].1;
         for &p in first_driver {
-            assert!(p == 0.0 || p >= trunc.pct_epsilon - 1e-6);
+            assert!(p == 0.0 || p >= 0.05 - 1e-6);
         }
+    }
+
+    #[test]
+    fn test_truncation_validation_clamps_high_values() {
+        // Test that validation clamps unreasonably high epsilon values
+        let trunc_high = Truncation { pct_epsilon: 0.6 };
+        let trunc_validated = trunc_high.validated();
+        assert_eq!(trunc_validated.pct_epsilon, 0.05);
+
+        let trunc_negative = Truncation { pct_epsilon: -0.1 };
+        let trunc_validated2 = trunc_negative.validated();
+        assert_eq!(trunc_validated2.pct_epsilon, 0.0);
+
+        let trunc_ok = Truncation { pct_epsilon: 0.03 };
+        let trunc_validated3 = trunc_ok.validated();
+        assert_eq!(trunc_validated3.pct_epsilon, 0.03);
     }
 
     #[test]

@@ -178,7 +178,7 @@ fn main() {
             nonnegative: true,
         },
         &Guardrails::default(),
-        &Truncation { pct_epsilon: 2.0 }, // More aggressive truncation
+        &Truncation { pct_epsilon: 0.02 }, // Slightly more aggressive than default (0.01)
     );
 
     match fit5 {
@@ -227,7 +227,7 @@ fn main() {
             nonnegative: true,
         },
         &Guardrails::default(),
-        &Truncation { pct_epsilon: 1.0 },
+        &Truncation::default(), // Use sensible default (0.01)
     );
 
     match fit6 {
@@ -277,7 +277,7 @@ fn main() {
             nonnegative: true,
         },
         &Guardrails::default(),
-        &Truncation { pct_epsilon: 1.0 },
+        &Truncation::default(), // Use sensible default (0.01)
     );
 
     match fit7 {

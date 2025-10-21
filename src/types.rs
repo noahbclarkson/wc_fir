@@ -104,6 +104,28 @@ impl Default for Truncation {
     }
 }
 
+impl Truncation {
+    /// Validates and clamps pct_epsilon to a sensible range.
+    ///
+    /// Percentages sum to 1.0, so epsilon values >= 0.5 would eliminate
+    /// most/all taps. This method clamps to [0.0, 0.5] and warns if needed.
+    pub fn validated(self) -> Self {
+        let mut eps = self.pct_epsilon;
+        if eps < 0.0 {
+            eps = 0.0;
+        }
+        if eps > 0.5 {
+            eprintln!(
+                "Warning: pct_epsilon={:.2} is very high (>= 0.5); clamping to 0.05 \
+                 to avoid zeroing all taps. Use values like 0.01-0.05 for typical use.",
+                self.pct_epsilon
+            );
+            eps = 0.05;
+        }
+        Self { pct_epsilon: eps }
+    }
+}
+
 /// Guardrails to keep fits statistically sane.
 #[derive(Clone, Debug)]
 pub struct Guardrails {
