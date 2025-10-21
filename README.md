@@ -140,6 +140,61 @@ fn main() {
 > **Why do some percentage vectors look like `[1.0, 0.0]`?**
 > `OlsOptions::default()` sets `nonnegative = true`, so negative tap weights are clipped to zero and the remaining weights are renormalised to sum to one. If you prefer the raw signed coefficients, disable the flag and inspect `fit.coeffs`.
 
+## Choosing the Right Strategy
+
+`wc_fir` provides three complementary approaches to lag selection:
+
+### 1. Manual (you pick lag lengths)
+
+```rust
+fit_ols(&drivers, &target, &[3, 2], &OlsOptions::default())
+```
+
+- ✅ Full control over lag structure
+- ✅ Contiguous blocks `[0..L-1]` per driver
+- ✅ Interpretable: percentages show how impact spreads over time
+- ❌ Requires domain knowledge to choose `L`
+
+**Use when:** You know the lag structure from industry standards or prior analysis.
+
+### 2. Sparse Auto (Lasso, BIC, Screening)
+
+```rust
+fit_auto(&drivers, &target)  // Uses Lasso by default
+```
+
+- ✅ Selects individual lags (e.g., only lag-2)
+- ✅ Good for sparse/noisy relationships
+- ✅ Automatic feature selection
+- ❌ Can produce "spiky" patterns unlike manual OLS
+- ❌ May select only intercept with small data
+
+**Use when:** You want aggressive feature selection or have many potential drivers.
+
+### 3. Prefix CV (automatic block lag selection)
+
+```rust
+fit_auto_prefix(&drivers, &target, None)
+```
+
+- ✅ Automatically chooses `L` via rolling CV
+- ✅ Maintains contiguous blocks `[0..L-1]` (like manual)
+- ✅ Produces models that behave like manual OLS
+- ✅ No hand-tuning required
+- ❌ Slower than manual (searches over `L`)
+
+**Use when:** You want "automatic Manual OLS" - interpretable lag spreads without hand-picking lengths.
+
+### Quick Comparison
+
+| Approach | Lag Structure | Example Taps | Intercept | Best For |
+|----------|---------------|--------------|-----------|----------|
+| **Manual OLS** | Contiguous `[0..L-1]` you pick | `[0.5, 0.35, 0.15]` | Small | Known lag patterns |
+| **Sparse (Lasso)** | Individual lags selected | `[0, 0, 1.0]` | Large | Feature selection |
+| **Prefix CV** | Contiguous `[0..L-1]` auto | `[0.24, 0, 0.76]` | Medium | Auto + interpretable |
+
+See `examples/ar_comparison.rs` for a detailed comparison on real AR data.
+
 ## Detailed Usage
 
 ### Understanding FIR Profiles
