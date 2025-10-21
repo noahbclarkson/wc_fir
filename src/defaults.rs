@@ -14,5 +14,5 @@ pub const DEFAULT_CD_TOL: f64 = 1e-6;
 pub const DEFAULT_CD_MAX_ITER: usize = 10_000;
 
 // Prefix CV defaults
-pub const DEFAULT_PREFIXCV_FOLDS: usize = 4;
+pub const DEFAULT_PREFIXCV_FOLDS: usize = 3;
 pub const DEFAULT_PREFIXCV_SHARED: bool = false;

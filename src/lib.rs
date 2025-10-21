@@ -144,6 +144,7 @@ mod integration_tests {
             intercept: true,
             ridge_lambda: 0.1,
             nonnegative: true,
+            constrain_scale_0_1: false,
         };
 
         let result = fit_ols(&drivers, target.as_slice(), &[2, 2], &opts);

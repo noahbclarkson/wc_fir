@@ -68,6 +68,7 @@ pub struct AutoLagResult {
 ///     intercept: false,
 ///     ridge_lambda: 0.0,
 ///     nonnegative: false,
+///     constrain_scale_0_1: false,
 /// };
 /// ```
 #[derive(Clone, Debug)]
@@ -78,6 +79,8 @@ pub struct OlsOptions {
     pub ridge_lambda: f64,
     /// Enforce nonnegativity post-fit (clip small negatives then renormalize).
     pub nonnegative: bool,
+    /// Enforce scale to be between 0 and 1, adjusting intercept for overflow.
+    pub constrain_scale_0_1: bool,
 }
 
 impl Default for OlsOptions {
@@ -86,6 +89,7 @@ impl Default for OlsOptions {
             intercept: true,
             ridge_lambda: 0.0,
             nonnegative: true,
+            constrain_scale_0_1: false,
         }
     }
 }

@@ -10,8 +10,8 @@
 //! Run with: cargo run --example ar_comparison
 
 use wc_fir::{
-    fit_auto, fit_auto_prefix, fit_ols, fit_ols_auto_lags, Caps, Guardrails, IcKind,
-    IcSearchKind, LagSelect, OlsOptions, Truncation,
+    fit_auto, fit_auto_prefix, fit_ols, fit_ols_auto_lags, Caps, Guardrails, IcKind, IcSearchKind,
+    LagSelect, OlsOptions, Truncation,
 };
 
 fn main() {
@@ -33,8 +33,8 @@ fn main() {
 
     // Driver 2: Special charges or adjustments (mostly zeros)
     let driver2 = vec![
-        0.0, 0.0, 0.0, 0.0, 2666.66, 2666.66, 9905.66, 0.0, 0.0, 0.0, 8500.0, 6000.0, 23000.0,
-        0.0, 4000.0, 0.0, 18000.0, 10163.7, 0.0, 5000.0, 0.0, 12000.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 2666.66, 2666.66, 9905.66, 0.0, 0.0, 0.0, 8500.0, 6000.0, 23000.0, 0.0,
+        4000.0, 0.0, 18000.0, 10163.7, 0.0, 5000.0, 0.0, 12000.0, 0.0, 0.0, 0.0, 0.0,
     ];
 
     // Trim drivers to match AR length (remove last element)
@@ -61,6 +61,7 @@ fn main() {
             intercept: true,
             ridge_lambda: 0.0,
             nonnegative: true,
+            constrain_scale_0_1: false,
         },
     );
 
@@ -89,6 +90,7 @@ fn main() {
             intercept: true,
             ridge_lambda: 1000.0, // Light regularization
             nonnegative: true,
+            constrain_scale_0_1: true,
         },
     );
 
@@ -115,8 +117,9 @@ fn main() {
         &[5, 3],
         &OlsOptions {
             intercept: true,
-            ridge_lambda: 5000.0, // More regularization for stability
+            ridge_lambda: 0.01, // More regularization for stability
             nonnegative: true,
+            constrain_scale_0_1: false,
         },
     );
 
@@ -176,6 +179,7 @@ fn main() {
             intercept: true,
             ridge_lambda: 0.0,
             nonnegative: true,
+            constrain_scale_0_1: false,
         },
         &Guardrails::default(),
         &Truncation { pct_epsilon: 0.02 }, // Slightly more aggressive than default (0.01)
@@ -225,6 +229,7 @@ fn main() {
             intercept: true,
             ridge_lambda: 0.0,
             nonnegative: true,
+            constrain_scale_0_1: false,
         },
         &Guardrails::default(),
         &Truncation::default(), // Use sensible default (0.01)
@@ -262,9 +267,9 @@ fn main() {
 
     let strategy7 = LagSelect::Screen {
         caps: caps7,
-        top_k: 10,          // Keep top 10 most correlated features
-        min_abs_corr: 0.3,  // Minimum absolute correlation threshold
-        prune_bic: true,    // Prune further using BIC
+        top_k: 10,         // Keep top 10 most correlated features
+        min_abs_corr: 0.3, // Minimum absolute correlation threshold
+        prune_bic: true,   // Prune further using BIC
     };
 
     let fit7 = fit_ols_auto_lags(
@@ -275,6 +280,7 @@ fn main() {
             intercept: true,
             ridge_lambda: 0.0,
             nonnegative: true,
+            constrain_scale_0_1: false,
         },
         &Guardrails::default(),
         &Truncation::default(), // Use sensible default (0.01)
@@ -313,6 +319,7 @@ fn main() {
             intercept: true,
             ridge_lambda: 0.0,
             nonnegative: false, // Allow negative coefficients
+            constrain_scale_0_1: false,
         },
     );
 

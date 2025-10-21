@@ -81,11 +81,13 @@ pub fn fit_auto_prefix(
         shared: DEFAULT_PREFIXCV_SHARED,
     };
 
-    // Use ridge like Manual OLS Strategy 3 for stability
+    // Use a light ridge penalty for stability. For unstandardized financial data,
+    // even a small lambda can be effective.
     let opts = OlsOptions {
         intercept: true,
-        ridge_lambda: 1000.0, // Matches successful manual strategies
+        ridge_lambda: 0.1, // Changed from 1000.0 to a more standard light penalty
         nonnegative: true,
+        constrain_scale_0_1: true, // Enable the new scale constraint
     };
     let guards = Guardrails::default(); // ratio=5, max_total=24
     let trunc = Truncation::default(); // epsilon=0.01
@@ -838,8 +840,9 @@ fn passes_guardrails(lags: &[usize], t_len: usize, guards: &Guardrails) -> bool 
         return false;
     }
 
-    let max_p_by_ratio =
-        ((t_len as f64) / guards.max_params_ratio.max(1.0)).floor().max(1.0) as usize;
+    let max_p_by_ratio = ((t_len as f64) / guards.max_params_ratio.max(1.0))
+        .floor()
+        .max(1.0) as usize;
     if p > max_p_by_ratio {
         return false;
     }
@@ -861,6 +864,7 @@ fn search_shared_prefix_l(
     let lmin = *caps.iter().min().unwrap_or(&0);
     let mut best = vec![0; caps.len()];
     let mut best_score = f64::INFINITY;
+    #[allow(unused_assignments)]
 
     for lag_len in 1..=lmin {
         let candidate = vec![lag_len; caps.len()];
@@ -934,6 +938,7 @@ fn search_per_driver_prefix_l(
     // For M>2, use greedy search
     let mut lags = vec![0usize; caps.len()];
     let mut improved = true;
+    #[allow(unused_assignments)]
     let mut best_score = f64::INFINITY;
 
     // Start with all 1s if possible
@@ -955,6 +960,7 @@ fn search_per_driver_prefix_l(
             return Ok(vec![1.min(caps[0]); caps.len()]);
         }
     }
+    let _ = best_score; // Suppress unused assignment warning
 
     // Greedy forward: add one lag at a time to the driver that improves most
     while improved {

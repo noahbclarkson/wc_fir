@@ -94,7 +94,7 @@ pub fn fit_ols(
 
     // Extract coefficients (params) - these are the FIR taps
     let beta_vec = fitted.params().to_vec();
-    let intercept = if opts.intercept {
+    let mut intercept = if opts.intercept {
         fitted.intercept()
     } else {
         0.0
@@ -104,7 +104,7 @@ pub fn fit_ols(
     let mut per_driver = Vec::with_capacity(lags.len());
     let mut off = 0;
 
-    for &lag in lags {
+    for (driver_idx, &lag) in lags.iter().enumerate() {
         let block = &beta_vec[off..off + lag];
         let mut scale: f64 = block.iter().sum();
 
@@ -134,6 +134,27 @@ pub fn fit_ols(
                     *w = 0.0;
                 }
                 scale = 0.0;
+            }
+        }
+
+        // Apply scale constraint if requested
+        if opts.constrain_scale_0_1 {
+            if scale < 0.0 {
+                scale = 0.0;
+            }
+            if scale > 1.0 {
+                // If an intercept is present, adjust it to compensate for the capped scale.
+                // This is an approximation: we add a constant offset based on the driver's mean
+                // to account for the average impact of the excess scale.
+                if opts.intercept {
+                    let driver = &drivers[driver_idx];
+                    if !driver.is_empty() {
+                        let driver_mean = driver.iter().sum::<f64>() / driver.len() as f64;
+                        let excess = scale - 1.0;
+                        intercept += excess * driver_mean;
+                    }
+                }
+                scale = 1.0;
             }
         }
 
@@ -232,11 +253,7 @@ pub(crate) fn compute_metrics(y_actual: &Array1<f64>, y_pred: &Array1<f64>) -> (
 ///
 /// # Returns
 /// Vector of predictions for the given drivers
-pub fn predict_ols(
-    drivers: &[Vec<f64>],
-    fit: &OlsFit,
-    lags: &[Lag],
-) -> Result<Vec<f64>, FirError> {
+pub fn predict_ols(drivers: &[Vec<f64>], fit: &OlsFit, lags: &[Lag]) -> Result<Vec<f64>, FirError> {
     if drivers.len() != fit.per_driver.len() {
         return Err(FirError::LengthMismatch);
     }
@@ -391,5 +408,33 @@ mod tests {
                 assert!(p >= 0.0, "Percentage should be non-negative");
             }
         }
+    }
+
+    #[test]
+    fn test_constrain_scale_0_1() {
+        // Create a scenario where scale would exceed 1.0 without constraint
+        let drivers = vec![vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]];
+        let target = vec![20.0, 40.0, 60.0, 80.0, 100.0, 120.0]; // y = 2*x, so scale = 2.0
+        let lags = vec![1];
+        let opts = OlsOptions {
+            constrain_scale_0_1: true,
+            intercept: true,
+            ..Default::default()
+        };
+
+        let result = fit_ols(&drivers, target.as_slice(), &lags, &opts).unwrap();
+
+        // Scale should be capped at 1.0
+        let (scale, _) = &result.per_driver[0];
+        assert!(*scale <= 1.0, "Scale should be constrained to <= 1.0");
+
+        // Intercept should be adjusted to compensate for the excess scale
+        // Original scale was 2.0, capped to 1.0, so excess = 1.0
+        // Adjustment: intercept += excess * driver_mean
+        // driver_mean ≈ 35.0, so intercept should increase by ~35.0
+        assert!(
+            result.intercept > 0.0,
+            "Intercept should be adjusted upward"
+        );
     }
 }
