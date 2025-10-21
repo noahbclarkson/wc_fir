@@ -33,7 +33,7 @@ Add `wc_fir` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-wc_fir = "0.2.0"
+wc_fir = "0.3.0"
 ```
 
 Or use `cargo add`:
